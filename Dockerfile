@@ -1,4 +1,4 @@
-FROM runpod/pytorch:2.3.0-py3.10-cuda12.1
+FROM pytorch/pytorch:2.3.0-cuda12.1-cudnn8-runtime
 
 ENV UPSCAYL_VERSION=latest \
     UPSCAYL_CLI_URL=https://github.com/upscayl/upscayl/releases/latest/download/upscayl-cli-linux.tar.xz \
