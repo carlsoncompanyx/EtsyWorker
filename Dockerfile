@@ -1,15 +1,23 @@
 FROM runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04
 
-ENV UPSCAYL_VERSION=latest \
-    UPSCAYL_CLI_URL=https://github.com/upscayl/upscayl/releases/latest/download/upscayl-cli-linux.tar.xz \
-    OUTPUT_DIR=/app/output
+# ---------- Environment setup ----------
+ENV OUTPUT_DIR=/app/output \
+    DEBIAN_FRONTEND=noninteractive
 
+WORKDIR /app
+
+# ---------- Install dependencies ----------
+# include git + node + certs to allow HTTPS clone
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
-        curl \
+        git \
         ca-certificates \
-        tar \
-        xz-utils \
+        curl \
+        wget \
+        nodejs \
+        npm \
+        libgl1 \
+        libglib2.0-0 \
         libgtk-3-0 \
         libnss3 \
         libasound2 \
@@ -23,13 +31,21 @@ RUN apt-get update && \
         libpango-1.0-0 \
         libgbm1 \
         libatk1.0-0 \
-        wget && \
+        xz-utils \
+        tar && \
+    update-ca-certificates && \
     rm -rf /var/lib/apt/lists/*
 
-# --- Install Node and build Upscayl CLI from source ---
-RUN apt-get update && apt-get install -y \
-    git nodejs npm libgl1 libglib2.0-0 wget curl && \
-    rm -rf /var/lib/apt/lists/* && \
-    git clone https://github.com/upscayl/upscayl-cli.git /opt/upscayl && \
+# ---------- Build Upscayl CLI from source ----------
+RUN git clone https://github.com/upscayl/upscayl-cli.git /opt/upscayl && \
     cd /opt/upscayl && npm install && npm run build && npm install -g .
 
+# ---------- Python dependencies ----------
+RUN pip install --no-cache-dir runpod requests
+
+# ---------- Prepare output directory ----------
+RUN mkdir -p /app/output
+
+COPY handler.py ./
+
+CMD ["python", "-u", "handler.py"]
