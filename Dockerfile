@@ -26,18 +26,10 @@ RUN apt-get update && \
         wget && \
     rm -rf /var/lib/apt/lists/*
 
-RUN mkdir -p /opt/upscayl /app/output && \
-    curl -L "$UPSCAYL_CLI_URL" -o /tmp/upscayl-cli-linux.tar.xz && \
-    tar -xJf /tmp/upscayl-cli-linux.tar.xz -C /opt/upscayl && \
-    chmod +x /opt/upscayl/upscayl-cli && \
-    ln -s /opt/upscayl/upscayl-cli /usr/local/bin/upscayl-cli && \
-    rm /tmp/upscayl-cli-linux.tar.xz
+# --- Install Node and build Upscayl CLI from source ---
+RUN apt-get update && apt-get install -y \
+    git nodejs npm libgl1 libglib2.0-0 wget curl && \
+    rm -rf /var/lib/apt/lists/* && \
+    git clone https://github.com/upscayl/upscayl-cli.git /opt/upscayl && \
+    cd /opt/upscayl && npm install && npm run build && npm install -g .
 
-WORKDIR /app
-
-COPY requirements.txt ./
-RUN pip install --no-cache-dir -r requirements.txt
-
-COPY . .
-
-CMD ["python", "server.py"]
