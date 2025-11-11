@@ -9,7 +9,7 @@ from urllib.parse import urlparse
 import requests
 import torch
 from PIL import Image
-from diffusers import DiffusionPipeline
+from diffusers import StableDiffusionUpscalePipeline
 
 OUTPUT_ROOT = Path(os.environ.get("OUTPUT_DIR", "/app/output"))
 OUTPUT_ROOT.mkdir(parents=True, exist_ok=True)
@@ -20,7 +20,7 @@ DEFAULT_PROMPT = os.environ.get(
     "detailed, high-resolution, finely textured photograph"
 )
 
-_PIPELINE: Optional[DiffusionPipeline] = None
+_PIPELINE: Optional[StableDiffusionUpscalePipeline] = None
 
 
 class ImageDownloadError(RuntimeError):
@@ -41,7 +41,7 @@ def _download_image(url: str, download_dir: Path) -> Path:
     response = requests.get(url, timeout=60)
     try:
         response.raise_for_status()
-    except requests.HTTPError as exc:
+    except requests.HTTPError as exc:  # pragma: no cover - logged for debugging
         raise ImageDownloadError(f"Failed to download image from {url}: {exc}") from exc
 
     parsed = urlparse(url)
@@ -73,7 +73,12 @@ def _initialize_pipeline() -> None:
     if _PIPELINE is not None:
         return
 
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    if not torch.cuda.is_available():
+        raise RuntimeError(
+            "CUDA device with xformers support is required for Stable Diffusion upscaling."
+        )
+
+    device = "cuda"
     token = os.environ.get("HUGGINGFACE_TOKEN")
     last_error: Optional[Exception] = None
 
@@ -82,21 +87,19 @@ def _initialize_pipeline() -> None:
         if token:
             kwargs["use_auth_token"] = token
         try:
-            pipeline = DiffusionPipeline.from_pretrained(MODEL_ID, **kwargs)
+            pipeline = StableDiffusionUpscalePipeline.from_pretrained(MODEL_ID, **kwargs)
             pipeline.set_progress_bar_config(disable=True)
-            if device == "cuda":
-                pipeline.to(device)
-                # --- Enable Xformers for memory-efficient attention (if available) ---
-                try:
-                    pipeline.enable_xformers_memory_efficient_attention()
-                except Exception as exc:
-                    print(f"Warning: Failed to enable xformers ({exc}). Running without memory-efficient attention.")
-                # -------------------------------------------------------------------
-            else:
-                pipeline.to("cpu")
+            pipeline.to(device)
+            pipeline.enable_attention_slicing()
+            try:
+                pipeline.enable_xformers_memory_efficient_attention()
+            except Exception as exc:
+                raise RuntimeError(
+                    "Failed to enable xformers memory efficient attention; ensure xformers is installed"
+                ) from exc
             _PIPELINE = pipeline
             return
-        except Exception as exc:
+        except Exception as exc:  # pragma: no cover - exercised in runtime environments
             last_error = exc
             continue
 
@@ -112,7 +115,7 @@ def _load_image(path: Path) -> Image.Image:
 def _run_upscale(prompt: str, image_path: Path, output_path: Path) -> Path:
     if _PIPELINE is None:
         _initialize_pipeline()
-    assert _PIPELINE is not None
+    assert _PIPELINE is not None  # for type checkers
 
     low_res_image = _load_image(image_path)
 

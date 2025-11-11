@@ -2,8 +2,8 @@
 
 This repository provides a RunPod Serverless handler that upscales images with the
 [`stabilityai/stable-diffusion-x4-upscaler`](https://huggingface.co/stabilityai/stable-diffusion-x4-upscaler)
-DiffusionPipeline. The endpoint accepts one or more image URLs, optionally guided by a
-prompt, and produces 4× `.webp` outputs rendered with high-quality settings.
+`StableDiffusionUpscalePipeline`. The endpoint accepts one or more image URLs, optionally
+guided by a prompt, and produces 4× `.webp` outputs rendered with high-quality settings.
 
 ## Building the container
 
@@ -12,11 +12,13 @@ docker build -t image-upscaler .
 ```
 
 The Docker image defaults to `runpod/pytorch:2.1.0-py3.10-cuda11.8`, installs the runtime
-dependencies for Diffusers, and prepares a cache directory at `/app/.cache/huggingface`
-for downloaded model weights. If your environment requires a different base image, pass
-`--build-arg BASE_IMAGE=<image:tag>` to the `docker build` command. Provide a
-`HUGGINGFACE_TOKEN` build or runtime environment variable if you need to access gated
-models or avoid anonymous rate limits.
+dependencies for Diffusers (including `xformers`), and prepares a cache directory at
+`/app/.cache/huggingface` for downloaded model weights. The handler requires a CUDA-capable
+GPU; it enables attention slicing and xFormers memory-efficient attention during
+initialization and will raise an error if those optimizations cannot be activated. If your
+environment requires a different base image, pass `--build-arg BASE_IMAGE=<image:tag>` to
+the `docker build` command. Provide a `HUGGINGFACE_TOKEN` build or runtime environment
+variable if you need to access gated models or avoid anonymous rate limits.
 
 ## Running locally
 
