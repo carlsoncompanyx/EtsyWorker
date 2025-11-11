@@ -1,9 +1,9 @@
 # ImageUpscaler
 
-This repository provides a RunPod Serverless handler that uses the Upscayl CLI to upscale
-images at 4× resolution with the `ultrasharp` model. The serverless endpoint accepts a list
-of image URLs and returns the filesystem paths to the resulting `.webp` images within the
-container.
+This repository provides a RunPod Serverless handler that upscales images with the
+[`stabilityai/stable-diffusion-x4-upscaler`](https://huggingface.co/stabilityai/stable-diffusion-x4-upscaler)
+DiffusionPipeline. The endpoint accepts one or more image URLs, optionally guided by a
+prompt, and produces 4× `.webp` outputs rendered with high-quality settings.
 
 ## Building the container
 
@@ -11,13 +11,17 @@ container.
 docker build -t image-upscaler .
 ```
 
-The Docker image extends `runpod/pytorch:2.3.0-py3.10-cuda12.1`, installs the latest Upscayl
-CLI release, and prepares the Python runtime.
+The Docker image extends `runpod/pytorch:2.3.0-py3.10-cuda12.1`, installs the runtime
+dependencies for Diffusers, and prepares a cache directory at `/app/.cache/huggingface`
+for downloaded model weights. Provide a `HUGGINGFACE_TOKEN` build or runtime environment
+variable if you need to access gated models or avoid anonymous rate limits.
 
 ## Running locally
 
 ```bash
-docker run --rm -p 8080:8080 image-upscaler
+docker run --rm -p 8080:8080 \
+  -e HUGGINGFACE_TOKEN="$HUGGINGFACE_TOKEN" \
+  image-upscaler
 ```
 
 The RunPod serverless runtime will automatically start and serve the handler defined in
@@ -25,7 +29,9 @@ The RunPod serverless runtime will automatically start and serve the handler def
 
 ## Invoking the handler
 
-Send a JSON payload with the image URLs to process:
+Send a JSON payload with the image URLs to process. You can optionally supply a single
+`prompt` applied to every image, or a `prompts` list that matches the order of
+`image_urls`.
 
 ```json
 {
@@ -33,13 +39,14 @@ Send a JSON payload with the image URLs to process:
     "image_urls": [
       "https://example.com/image-1.png",
       "https://example.com/photo.jpg"
-    ]
+    ],
+    "prompt": "Finely detailed, cinematic lighting"
   }
 }
 ```
 
-The handler downloads each image, upscales it with Upscayl using the `ultrasharp` model at 4×
-scale, saves the results as maximum-quality `.webp` files, and returns a response structured as:
+The handler downloads each image, upscales it with the Stable Diffusion x4 pipeline, saves
+the results as maximum-quality `.webp` files, and returns a response structured as:
 
 ```json
 {
@@ -50,5 +57,6 @@ scale, saves the results as maximum-quality `.webp` files, and returns a respons
 }
 ```
 
-The `/app/output` directory is persisted within the container and can be mounted or exported as
-needed when deploying the endpoint in RunPod.
+Set the `UPSCALE_DEFAULT_PROMPT` environment variable to control the default guidance when
+no prompt is provided. Model weights are cached inside the container and reused across
+invocations for faster warm starts.
