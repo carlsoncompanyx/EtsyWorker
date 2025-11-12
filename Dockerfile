@@ -1,4 +1,4 @@
-FROM xinntao/realesrgan:latest
+FROM aiartists/realesrgan:latest
 
 ENV PYTHONUNBUFFERED=1 \
     OUTPUT_DIR=/app/output
