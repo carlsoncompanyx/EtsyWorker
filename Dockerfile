@@ -1,4 +1,4 @@
-ARG BASE_IMAGE=pytorch/pytorch:2.1.0-cuda11.8-cudnn8-runtime
+ARG BASE_IMAGE=runpod/pytorch:2.1.0-py3.10-cuda11.8
 FROM ${BASE_IMAGE}
 
 ENV OUTPUT_DIR=/app/output \

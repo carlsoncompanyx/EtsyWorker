@@ -6,38 +6,43 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 from urllib.parse import urlparse
 
+import numpy as np
 import requests
 import torch
 from PIL import Image
-from diffusers import StableDiffusionUpscalePipeline
-
-# Added for explicit memory cleanup
-import gc 
+from basicsr.archs.rrdbnet_arch import RRDBNet
+from realesrgan import RealESRGANer
 
 OUTPUT_ROOT = Path(os.environ.get("OUTPUT_DIR", "/app/output"))
 OUTPUT_ROOT.mkdir(parents=True, exist_ok=True)
 
-MODEL_ID = os.environ.get("UPSCALE_MODEL_ID", "stabilityai/stable-diffusion-x4-upscaler")
-DEFAULT_PROMPT = os.environ.get(
-    "UPSCALE_DEFAULT_PROMPT",
-    "detailed, high-resolution, finely textured photograph"
+MODEL_NAME = os.environ.get("REAL_ESRGAN_MODEL", "RealESRGAN_x4plus")
+MODEL_SCALE = int(os.environ.get("REAL_ESRGAN_SCALE", "4"))
+MODEL_WEIGHTS_URL = os.environ.get(
+    "REAL_ESRGAN_WEIGHTS_URL",
+    "https://huggingface.co/xinntao/Real-ESRGAN/resolve/main/RealESRGAN_x4plus.pth",
 )
+MODEL_DIR = Path(os.environ.get("MODEL_DIR", "/app/models"))
+MODEL_DIR.mkdir(parents=True, exist_ok=True)
 
-_PIPELINE: Optional[StableDiffusionUpscalePipeline] = None
+_UPSAMPLER: Optional[RealESRGANer] = None
 
 
 class ImageDownloadError(RuntimeError):
     """Raised when an input image cannot be downloaded."""
 
 
-def _iter_prompts(image_count: int, prompt: Optional[str], prompts: Optional[Iterable[str]]) -> Iterable[str]:
-    if prompts:
-        prompt_list = list(prompts)
-        if len(prompt_list) != image_count:
-            raise ValueError("Length of 'prompts' must match 'image_urls'.")
-        return prompt_list
-    resolved = prompt or DEFAULT_PROMPT
-    return [resolved] * image_count
+class ModelDownloadError(RuntimeError):
+    """Raised when the Real-ESRGAN weights cannot be retrieved."""
+
+
+def _validate_prompts(image_count: int, prompt: Optional[str], prompts: Optional[Iterable[str]]) -> None:
+    del prompt  # textual prompts are ignored by Real-ESRGAN
+    if not prompts:
+        return
+    prompt_list = list(prompts)
+    if len(prompt_list) != image_count:
+        raise ValueError("Length of 'prompts' must match 'image_urls'.")
 
 
 def _download_image(url: str, download_dir: Path) -> Path:
@@ -54,71 +59,56 @@ def _download_image(url: str, download_dir: Path) -> Path:
     return filename
 
 
-def _resolve_dtype_candidates(device: str) -> List[torch.dtype]:
-    candidates: List[torch.dtype] = []
-    # By default, we prioritize bfloat16, then float16, as they save VRAM
-    preferred_name = os.environ.get("TORCH_DTYPE", "bfloat16")
-    preferred = getattr(torch, preferred_name, None)
-    if isinstance(preferred, torch.dtype):
-        candidates.append(preferred)
-    if device == "cuda":
-        for dtype in (torch.float16, torch.float32):
-            if dtype not in candidates:
-                candidates.append(dtype)
-    else:
-        if torch.float32 not in candidates:
-            candidates.append(torch.float32)
-    return candidates
+def _download_weights() -> Path:
+    parsed = urlparse(MODEL_WEIGHTS_URL)
+    if not parsed.scheme:
+        raise ModelDownloadError("MODEL_WEIGHTS_URL must be an absolute URL")
+
+    destination = MODEL_DIR / Path(parsed.path).name
+    if destination.exists():
+        return destination
+
+    response = requests.get(MODEL_WEIGHTS_URL, timeout=300)
+    try:
+        response.raise_for_status()
+    except requests.HTTPError as exc:
+        raise ModelDownloadError(
+            f"Failed to download Real-ESRGAN weights from {MODEL_WEIGHTS_URL}: {exc}"
+        ) from exc
+
+    tmp_path = destination.with_suffix(".tmp")
+    tmp_path.write_bytes(response.content)
+    tmp_path.replace(destination)
+    return destination
 
 
-def _initialize_pipeline() -> None:
-    global _PIPELINE
+def _build_rrdb_model(scale: int) -> RRDBNet:
+    if MODEL_NAME == "RealESRGAN_x4plus":
+        return RRDBNet(num_in_ch=3, num_out_ch=3, num_feat=64, num_block=23, num_grow_ch=32, scale=scale)
+    raise RuntimeError(f"Unsupported Real-ESRGAN model: {MODEL_NAME}")
 
-    if _PIPELINE is not None:
+
+def _initialize_upsampler() -> None:
+    global _UPSAMPLER
+
+    if _UPSAMPLER is not None:
         return
 
-    if not torch.cuda.is_available():
-        raise RuntimeError(
-            "CUDA device with xformers support is required for Stable Diffusion upscaling."
-        )
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    weights_path = _download_weights()
+    model = _build_rrdb_model(MODEL_SCALE)
 
-    device = "cuda"
-    token = os.environ.get("HUGGINGFACE_TOKEN")
-    last_error: Optional[Exception] = None
-
-    for dtype in _resolve_dtype_candidates(device):
-        kwargs: Dict[str, Any] = {"torch_dtype": dtype}
-        if token:
-            kwargs["use_auth_token"] = token
-        try:
-            # 1. Initialize pipeline with best available dtype (bfloat16/float16 first)
-            pipeline = StableDiffusionUpscalePipeline.from_pretrained(MODEL_ID, **kwargs)
-            pipeline.set_progress_bar_config(disable=True)
-            # pipeline.to(device) # <-- MUST be called later
-
-            # --- VRAM Optimizations ---
-            pipeline.enable_attention_slicing()
-            pipeline.enable_vae_slicing() 
-
-            # FIX for OOM: Enables Sequential CPU Offload. 
-            # This is the guaranteed way to fit the model using large system RAM.
-            pipeline.enable_sequential_cpu_offload()
-
-            try:
-                pipeline.enable_xformers_memory_efficient_attention()
-            except Exception as exc:
-                raise RuntimeError(
-                    "Failed to enable xformers memory efficient attention; ensure xformers is installed"
-                ) from exc
-            
-            _PIPELINE = pipeline
-            return
-        except Exception as exc:  # pragma: no cover - exercised in runtime environments
-            last_error = exc
-            print(f"Failed to load pipeline with dtype {dtype}: {exc}")
-            continue
-
-    raise RuntimeError("Failed to initialize diffusion pipeline") from last_error
+    half_precision = device == "cuda"
+    _UPSAMPLER = RealESRGANer(
+        scale=MODEL_SCALE,
+        model_path=str(weights_path),
+        model=model,
+        tile=int(os.environ.get("REALESRGAN_TILE", "0")),
+        tile_pad=int(os.environ.get("REALESRGAN_TILE_PAD", "10")),
+        pre_pad=int(os.environ.get("REALESRGAN_PRE_PAD", "0")),
+        half=half_precision,
+        device=torch.device(device),
+    )
 
 
 def _load_image(path: Path) -> Image.Image:
@@ -127,24 +117,25 @@ def _load_image(path: Path) -> Image.Image:
         return image.convert("RGB")
 
 
-def _run_upscale(prompt: str, image_path: Path, output_path: Path) -> Path:
-    if _PIPELINE is None:
-        _initialize_pipeline()
-    assert _PIPELINE is not None  # for type checkers
+def _run_upscale(image_path: Path, output_path: Path) -> Path:
+    if _UPSAMPLER is None:
+        _initialize_upsampler()
+    assert _UPSAMPLER is not None  # for type checkers
 
     low_res_image = _load_image(image_path)
-    
-    # Aggressively clear VRAM before the main inference call
-    gc.collect()
-    torch.cuda.empty_cache()
+    image_array = np.array(low_res_image)
 
     with torch.inference_mode():
-        result = _PIPELINE(prompt=prompt, image=low_res_image)
-    upscaled = result.images[0]
+        upscaled_array, _ = _UPSAMPLER.enhance(image_array, outscale=MODEL_SCALE)
 
+    upscaled = Image.fromarray(upscaled_array)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    # Using quality=100 for maximum retention
-    upscaled.save(output_path, format="WEBP", quality=100)
+    upscaled.save(
+        output_path,
+        format="JPEG",
+        quality=100,
+        subsampling=0,
+    )
     return output_path
 
 
@@ -156,18 +147,18 @@ def handler(event: Dict[str, Any]) -> Dict[str, Any]:
 
     prompt = input_payload.get("prompt")
     prompts = input_payload.get("prompts")
+    _validate_prompts(len(image_urls), prompt, prompts)
 
     outputs: List[str] = []
-    temp_dir = Path("/tmp") / f"hf_upscaler_{uuid.uuid4().hex}"
+    temp_dir = Path("/tmp") / f"realesrgan_{uuid.uuid4().hex}"
     temp_dir.mkdir(parents=True, exist_ok=True)
 
     try:
-        prompt_iterable = _iter_prompts(len(image_urls), prompt, prompts)
-        for url, prompt_text in zip(image_urls, prompt_iterable):
+        for url in image_urls:
             source_path = _download_image(url, temp_dir)
-            output_name = f"upscaled_{uuid.uuid4().hex}.webp"
+            output_name = f"upscaled_{uuid.uuid4().hex}.jpg"
             final_output_path = OUTPUT_ROOT / output_name
-            upscaled_path = _run_upscale(prompt_text, source_path, final_output_path)
+            upscaled_path = _run_upscale(source_path, final_output_path)
             outputs.append(str(upscaled_path))
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)
