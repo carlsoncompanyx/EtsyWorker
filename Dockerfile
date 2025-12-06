@@ -26,8 +26,8 @@ RUN mkdir -p /app/models && \
     wget https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.2.3/RealESRGAN_x4plus_anime_6B.pth && \
     wget https://github.com/xinntao/Real-ESRGAN/releases/download/v0.1.1/RealESRNet_x4plus.pth
 
-# Copy the worker script
-COPY runpod_worker.py .
+# Copy your worker script
+COPY handler.py .
 
 # Set environment variables
 ENV PYTHONUNBUFFERED=1
@@ -37,8 +37,8 @@ ENV HF_HOME=/app/cache
 # Create cache directory
 RUN mkdir -p /app/cache
 
-# Expose port (not strictly necessary for RunPod but good practice)
+# Expose port (not required for RunPod but OK)
 EXPOSE 8000
 
 # Run the worker
-CMD ["python", "-u", "runpod_worker.py"]
+CMD ["python", "-u", "handler.py"]
