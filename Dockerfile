@@ -32,7 +32,7 @@ RUN mkdir -p /app/models && \
     echo "✅ All Real-ESRGAN models downloaded"
 
 # Copy the worker script
-COPY runpod_worker.py .
+COPY handler.py .
 
 # Set environment variables
 ENV PYTHONUNBUFFERED=1
@@ -47,4 +47,4 @@ RUN mkdir -p /app/cache
 EXPOSE 8000
 
 # Run the worker
-CMD ["python", "-u", "runpod_worker.py"]
+CMD ["python", "-u", "handler.py"]
