@@ -23,13 +23,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Install RunPod SDK
 RUN pip install --no-cache-dir runpod
 
-# Create models directory and download Real-ESRGAN models during build
-RUN mkdir -p /app/models && \
-    cd /app/models && \
-    wget -q https://github.com/xinntao/Real-ESRGAN/releases/download/v0.1.0/RealESRGAN_x4plus.pth && \
-    wget -q https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.2.3/RealESRGAN_x4plus_anime_6B.pth && \
-    wget -q https://github.com/xinntao/Real-ESRGAN/releases/download/v0.1.1/RealESRNet_x4plus.pth && \
-    echo "✅ All Real-ESRGAN models downloaded"
+# Create models directory (models will be downloaded on first run)
+RUN mkdir -p /app/models
 
 # Copy the worker script
 COPY handler.py .
