@@ -16,12 +16,12 @@ RUN apt-get update && apt-get install -y \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy unified handler script
+# Copy scripts
 COPY handler.py .
+COPY download_models.py .
 
 # Pre-download models to speed up cold starts
-RUN python -c "from diffusers import DiffusionPipeline; DiffusionPipeline.from_pretrained('playgroundai/playground-v2.5-1024px-aesthetic', torch_dtype='float16', variant='fp16')"
-RUN python -c "from transformers import CLIPModel, CLIPProcessor; CLIPModel.from_pretrained('openai/clip-vit-large-patch14'); CLIPProcessor.from_pretrained('openai/clip-vit-large-patch14')"
+RUN python download_models.py && rm download_models.py
 
 # Start the unified handler
 CMD ["python", "-u", "handler.py"]
