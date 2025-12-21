@@ -4,6 +4,12 @@ FROM runpod/pytorch:2.1.0-py3.10-cuda11.8.0-devel-ubuntu22.04
 # Set working directory
 WORKDIR /app
 
+# Set environment variables
+ENV PYTHONUNBUFFERED=1
+ENV HF_HOME=/runpod-volume/huggingface
+ENV TRANSFORMERS_CACHE=/runpod-volume/huggingface/transformers
+ENV HF_DATASETS_CACHE=/runpod-volume/huggingface/datasets
+
 # Install system dependencies
 RUN apt-get update && apt-get install -y \
     git \
@@ -16,12 +22,11 @@ RUN apt-get update && apt-get install -y \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy scripts
+# Copy handler script
 COPY handler.py .
-COPY download_models.py .
 
-# Pre-download models to speed up cold starts
-RUN python download_models.py && rm download_models.py
+# Note: Models will be downloaded on first run and cached to /runpod-volume
+# This is faster and more reliable than downloading during Docker build
 
 # Start the unified handler
 CMD ["python", "-u", "handler.py"]
