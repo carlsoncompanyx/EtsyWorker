@@ -1,14 +1,18 @@
-# file: handler.py
+# handler.py
 """
-RunPod Serverless: unified /create + /production
+RunPod Serverless - Unified endpoint
 
-Rules (as requested):
-- guidance_scale is ALWAYS 7.0 (not an input)
-- /create uses 25 steps (not an input), seed is randomized, returns seed in metadata, returns aesthetic_score
-- /production uses 50 steps (not an input), requires seed, does NOT score
-- n8n only sends:
-    create: prompt, negative_prompt, width, height
-    production: prompt, negative_prompt, width, height, seed
+Contract:
+- route=create: requires prompt, negative_prompt, width, height
+  - steps fixed = 25
+  - cfg fixed = 7.0
+  - seed randomized and returned in metadata
+  - returns aesthetic_score
+
+- route=production: requires prompt, negative_prompt, width, height, seed
+  - steps fixed = 50
+  - cfg fixed = 7.0
+  - NO aesthetic scoring
 """
 
 from __future__ import annotations
@@ -26,25 +30,18 @@ from PIL import Image
 from diffusers import DiffusionPipeline, EDMDPMSolverMultistepScheduler
 from transformers import AutoModel, AutoProcessor
 
-
 PLAYGROUND_REPO = "playgroundai/playground-v2.5-1024px-aesthetic"
 AESTHETICS_REPO = "discus0434/aesthetic-predictor-v2-5"
 
-CFG_SCALE = 7.0
+CFG = 7.0
 CREATE_STEPS = 25
 PRODUCTION_STEPS = 50
 
-# Use RunPod Cached Models path if enabled. Cached models live under:
-# /runpod-volume/huggingface-cache/hub/ :contentReference[oaicite:4]{index=4}
-HF_ROOT = os.environ.get("HF_HOME", "/runpod-volume/huggingface-cache")
-os.environ.setdefault("HF_HOME", HF_ROOT)
-os.environ.setdefault("HF_HUB_CACHE", os.path.join(HF_ROOT, "hub"))
-os.environ.setdefault("TRANSFORMERS_CACHE", os.path.join(HF_ROOT, "transformers"))
-os.environ.setdefault("HF_HUB_DISABLE_TELEMETRY", "1")
-
-# Optional: set LOCAL_FILES_ONLY=1 once cached models are configured,
-# so workers never try to download at runtime.
 LOCAL_FILES_ONLY = os.environ.get("LOCAL_FILES_ONLY", "0") == "1"
+
+pipe: Optional[DiffusionPipeline] = None
+aesthetic_model: Optional[torch.nn.Module] = None
+aesthetic_processor: Optional[Any] = None
 
 
 def _log(msg: str) -> None:
@@ -52,17 +49,12 @@ def _log(msg: str) -> None:
     sys.stdout.flush()
 
 
-pipe: Optional[DiffusionPipeline] = None
-aesthetic_model: Optional[torch.nn.Module] = None
-aesthetic_processor: Optional[Any] = None
-
-
 def load_pipe() -> None:
     global pipe
     if pipe is not None:
         return
 
-    _log("[init] Loading Playground pipeline...")
+    _log("[init] Loading Playground v2.5...")
     pipe = DiffusionPipeline.from_pretrained(
         PLAYGROUND_REPO,
         torch_dtype=torch.float16,
@@ -103,6 +95,7 @@ def _img_to_b64_jpeg(img: Image.Image, quality: int = 95) -> str:
 def _calc_score(img: Image.Image) -> float:
     assert aesthetic_model is not None and aesthetic_processor is not None
     inputs = aesthetic_processor(images=img, return_tensors="pt").to("cuda")
+
     with torch.inference_mode():
         outputs = aesthetic_model(**inputs)
 
@@ -129,7 +122,7 @@ def route_create(inp: Dict[str, Any]) -> Dict[str, Any]:
     seed = int(torch.randint(0, 2**32 - 1, (1,)).item())
     gen = torch.Generator(device="cuda").manual_seed(seed)
 
-    _log(f"[create] {width}x{height} seed={seed} steps={CREATE_STEPS} cfg={CFG_SCALE}")
+    _log(f"[create] {width}x{height} seed={seed} steps={CREATE_STEPS} cfg={CFG}")
 
     with torch.inference_mode():
         img = pipe(
@@ -138,23 +131,24 @@ def route_create(inp: Dict[str, Any]) -> Dict[str, Any]:
             width=width,
             height=height,
             num_inference_steps=CREATE_STEPS,
-            guidance_scale=CFG_SCALE,
+            guidance_scale=CFG,
             generator=gen,
         ).images[0]
 
     score = _calc_score(img)
+
     return {
         "route": "create",
         "image": _img_to_b64_jpeg(img),
         "aesthetic_score": score,
         "metadata": {
-            "seed": seed,
-            "width": width,
-            "height": height,
-            "steps": CREATE_STEPS,
-            "cfg_scale": CFG_SCALE,
             "prompt": prompt,
             "negative_prompt": negative,
+            "width": width,
+            "height": height,
+            "seed": seed,
+            "steps": CREATE_STEPS,
+            "cfg_scale": CFG,
             "model": "playground-v2.5-1024px-aesthetic",
         },
     }
@@ -175,7 +169,7 @@ def route_production(inp: Dict[str, Any]) -> Dict[str, Any]:
     seed = int(inp["seed"])
     gen = torch.Generator(device="cuda").manual_seed(seed)
 
-    _log(f"[production] {width}x{height} seed={seed} steps={PRODUCTION_STEPS} cfg={CFG_SCALE}")
+    _log(f"[production] {width}x{height} seed={seed} steps={PRODUCTION_STEPS} cfg={CFG}")
 
     with torch.inference_mode():
         img = pipe(
@@ -184,7 +178,7 @@ def route_production(inp: Dict[str, Any]) -> Dict[str, Any]:
             width=width,
             height=height,
             num_inference_steps=PRODUCTION_STEPS,
-            guidance_scale=CFG_SCALE,
+            guidance_scale=CFG,
             generator=gen,
         ).images[0]
 
@@ -192,13 +186,13 @@ def route_production(inp: Dict[str, Any]) -> Dict[str, Any]:
         "route": "production",
         "image": _img_to_b64_jpeg(img),
         "metadata": {
-            "seed": seed,
-            "width": width,
-            "height": height,
-            "steps": PRODUCTION_STEPS,
-            "cfg_scale": CFG_SCALE,
             "prompt": prompt,
             "negative_prompt": negative,
+            "width": width,
+            "height": height,
+            "seed": seed,
+            "steps": PRODUCTION_STEPS,
+            "cfg_scale": CFG,
             "model": "playground-v2.5-1024px-aesthetic",
         },
     }
@@ -213,7 +207,6 @@ def handler(job: Dict[str, Any]) -> Dict[str, Any]:
                 "aesthetics_loaded": aesthetic_model is not None,
                 "gpu_available": torch.cuda.is_available(),
                 "gpu_name": torch.cuda.get_device_name(0) if torch.cuda.is_available() else "N/A",
-                "local_files_only": LOCAL_FILES_ONLY,
             }
 
         inp = job["input"]
@@ -233,5 +226,5 @@ def handler(job: Dict[str, Any]) -> Dict[str, Any]:
 
 
 if __name__ == "__main__":
-    _log("Starting serverless handler...")
+    _log("Starting RunPod serverless handler...")
     runpod.serverless.start({"handler": handler})
