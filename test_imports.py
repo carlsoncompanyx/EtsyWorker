@@ -4,6 +4,17 @@ Run this to debug import issues
 """
 
 import sys
+import huggingface_hub
+
+# Backward-compatibility shim for diffusers<=0.25 expecting cached_download
+# huggingface_hub 0.23+ removed cached_download; remap to hf_hub_download when missing
+if not hasattr(huggingface_hub, "cached_download"):
+    from huggingface_hub import file_download
+
+    def _cached_download(*args, **kwargs):
+        return file_download.hf_hub_download(*args, **kwargs)
+
+    huggingface_hub.cached_download = _cached_download
 
 print("Python version:", sys.version)
 print("\nTesting imports...")
@@ -69,8 +80,13 @@ print("\nTesting specific classes...")
 print("=" * 60)
 
 try:
-    from diffusers import DiffusionPipeline, EDMDPMSolverMultistepScheduler, EDMEulerScheduler
-    print("✓ DiffusionPipeline and schedulers")
+    try:
+        from diffusers import DiffusionPipeline, EDMDPMSolverMultistepScheduler, EDMEulerScheduler
+        print("✓ DiffusionPipeline and schedulers (EDM)")
+    except ImportError:
+        from diffusers import DiffusionPipeline, DPMSolverMultistepScheduler
+        EDMDPMSolverMultistepScheduler = DPMSolverMultistepScheduler
+        print("✓ DiffusionPipeline and schedulers (DPM fallback)")
 except Exception as e:
     print(f"✗ DiffusionPipeline: {e}")
     sys.exit(1)
