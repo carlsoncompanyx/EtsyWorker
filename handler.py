@@ -2,21 +2,105 @@ import os
 import sys
 import base64
 import io
-import torch
-import torch.nn as nn
-from PIL import Image
-import runpod
-import huggingface_hub
+import traceback
 
-# Backward-compatibility shim for diffusers<=0.25 expecting cached_download
-if not hasattr(huggingface_hub, "cached_download"):
-    from huggingface_hub import file_download
-    def _cached_download(*args, **kwargs):
-        return file_download.hf_hub_download(*args, **kwargs)
-    huggingface_hub.cached_download = _cached_download
+# Print Python and system info immediately
+print("="*60)
+print("STARTUP DIAGNOSTICS")
+print("="*60)
+print(f"Python version: {sys.version}")
+print(f"Python executable: {sys.executable}")
+print(f"Current working directory: {os.getcwd()}")
+print(f"Contents of /workspace: {os.listdir('/workspace') if os.path.exists('/workspace') else 'NOT FOUND'}")
+print("="*60)
 
-from diffusers import StableDiffusionXLPipeline, EDMDPMSolverMultistepScheduler
-from transformers import AutoModel, AutoProcessor
+try:
+    print("Importing torch...")
+    import torch
+    print(f"✓ torch {torch.__version__}")
+    print(f"  CUDA available: {torch.cuda.is_available()}")
+    if torch.cuda.is_available():
+        print(f"  CUDA version: {torch.version.cuda}")
+        print(f"  GPU: {torch.cuda.get_device_name(0)}")
+except Exception as e:
+    print(f"✗ FAILED to import torch: {e}")
+    traceback.print_exc()
+    sys.exit(1)
+
+try:
+    print("Importing torch.nn...")
+    import torch.nn as nn
+    print("✓ torch.nn imported")
+except Exception as e:
+    print(f"✗ FAILED to import torch.nn: {e}")
+    traceback.print_exc()
+    sys.exit(1)
+
+try:
+    print("Importing PIL...")
+    from PIL import Image
+    print("✓ PIL imported")
+except Exception as e:
+    print(f"✗ FAILED to import PIL: {e}")
+    traceback.print_exc()
+    sys.exit(1)
+
+try:
+    print("Importing runpod...")
+    import runpod
+    print(f"✓ runpod {runpod.__version__}")
+except Exception as e:
+    print(f"✗ FAILED to import runpod: {e}")
+    traceback.print_exc()
+    sys.exit(1)
+
+try:
+    print("Importing huggingface_hub...")
+    import huggingface_hub
+    print(f"✓ huggingface_hub {huggingface_hub.__version__}")
+    
+    # Backward-compatibility shim
+    if not hasattr(huggingface_hub, "cached_download"):
+        from huggingface_hub import file_download
+        def _cached_download(*args, **kwargs):
+            return file_download.hf_hub_download(*args, **kwargs)
+        huggingface_hub.cached_download = _cached_download
+        print("  Applied cached_download shim")
+except Exception as e:
+    print(f"✗ FAILED to import huggingface_hub: {e}")
+    traceback.print_exc()
+    sys.exit(1)
+
+try:
+    print("Importing diffusers...")
+    import diffusers
+    print(f"✓ diffusers {diffusers.__version__}")
+    
+    print("Importing StableDiffusionXLPipeline...")
+    from diffusers import StableDiffusionXLPipeline
+    print("✓ StableDiffusionXLPipeline imported")
+    
+    print("Importing EDMDPMSolverMultistepScheduler...")
+    from diffusers import EDMDPMSolverMultistepScheduler
+    print("✓ EDMDPMSolverMultistepScheduler imported")
+except Exception as e:
+    print(f"✗ FAILED to import diffusers components: {e}")
+    traceback.print_exc()
+    sys.exit(1)
+
+try:
+    print("Importing transformers...")
+    from transformers import AutoModel, AutoProcessor
+    import transformers
+    print(f"✓ transformers {transformers.__version__}")
+except Exception as e:
+    print(f"✗ FAILED to import transformers: {e}")
+    traceback.print_exc()
+    sys.exit(1)
+
+print("="*60)
+print("ALL IMPORTS SUCCESSFUL")
+print("="*60)
 
 # Add GitHub repo to path
 sys.path.append('/workspace/aesthetic-predictor-v2-5')
@@ -26,6 +110,12 @@ MODEL_PATH = "/workspace/playground-v2.5-1024px-aesthetic.fp16.safetensors"
 SIGLIP_PATH = "/workspace/siglip"
 PREDICTOR_WEIGHTS = "/workspace/aesthetic-predictor-v2-5/aesthetic-predictor.pth"
 
+print("\nChecking file paths...")
+print(f"MODEL_PATH exists: {os.path.exists(MODEL_PATH)}")
+print(f"SIGLIP_PATH exists: {os.path.exists(SIGLIP_PATH)}")
+print(f"PREDICTOR_WEIGHTS exists: {os.path.exists(PREDICTOR_WEIGHTS)}")
+print(f"aesthetic-predictor-v2-5 dir exists: {os.path.exists('/workspace/aesthetic-predictor-v2-5')}")
+
 pipe = None
 aesthetic_model = None
 aesthetic_processor = None
@@ -34,7 +124,7 @@ def load_models():
     global pipe, aesthetic_model, aesthetic_processor
     
     if pipe is None:
-        print(f"Loading Playground from {MODEL_PATH}")
+        print(f"\nLoading Playground from {MODEL_PATH}")
         try:
             # Load the pipeline
             pipe = StableDiffusionXLPipeline.from_single_file(
@@ -50,14 +140,15 @@ def load_models():
             # Enable memory optimizations
             pipe.enable_attention_slicing()
             
-            print("Pipeline loaded successfully")
-            print(f"Scheduler: {type(pipe.scheduler).__name__}")
+            print("✓ Pipeline loaded successfully")
+            print(f"  Scheduler: {type(pipe.scheduler).__name__}")
         except Exception as e:
-            print(f"Error loading pipeline: {e}")
+            print(f"✗ Error loading pipeline: {e}")
+            traceback.print_exc()
             raise
 
     if aesthetic_model is None:
-        print(f"Loading Predictor from {SIGLIP_PATH}")
+        print(f"\nLoading Predictor from {SIGLIP_PATH}")
         try:
             from aesthetic_predictor_v2_5 import AestheticPredictorV2_5
             
@@ -67,12 +158,16 @@ def load_models():
             aesthetic_model = AestheticPredictorV2_5(backbone).to("cuda")
             aesthetic_model.load_state_dict(torch.load(PREDICTOR_WEIGHTS, map_location="cuda"))
             aesthetic_model.eval()
-            print("Aesthetic model loaded successfully")
+            print("✓ Aesthetic model loaded successfully")
         except Exception as e:
-            print(f"Error loading aesthetic model: {e}")
+            print(f"✗ Error loading aesthetic model: {e}")
+            traceback.print_exc()
             raise
 
 def handler(job):
+    print("\n" + "="*60)
+    print("HANDLER CALLED")
+    print("="*60)
     try:
         load_models()
         inp = job.get("input", {})
@@ -82,15 +177,12 @@ def handler(job):
         
         # Route-specific settings
         if route == "create":
-            # Fast route: fewer steps
             num_steps = 25
             guidance_scale = 3.0
         elif route == "production":
-            # High quality route: more steps
             num_steps = 50
             guidance_scale = 3.0
         else:
-            # Default/custom settings
             num_steps = inp.get("num_inference_steps", 25)
             guidance_scale = inp.get("guidance_scale", 3.0)
         
@@ -101,10 +193,11 @@ def handler(job):
         generator = torch.Generator(device="cuda").manual_seed(seed)
         
         print(f"Route: {route}")
-        print(f"Generating image with prompt: {prompt}")
+        print(f"Prompt: {prompt}")
         print(f"Steps: {num_steps}, Guidance: {guidance_scale}, Seed: {seed}")
         
         # Generation logic
+        print("Starting image generation...")
         image = pipe(
             prompt=prompt,
             num_inference_steps=num_steps,
@@ -112,7 +205,7 @@ def handler(job):
             generator=generator
         ).images[0]
         
-        print("Image generated, calculating aesthetic score...")
+        print("✓ Image generated, calculating aesthetic score...")
         
         # Scoring logic
         inputs = aesthetic_processor(images=image, return_tensors="pt").to("cuda")
@@ -130,15 +223,21 @@ def handler(job):
             "seed": seed
         }
         
-        print(f"Success! Aesthetic score: {result['aesthetic_score']}")
+        print(f"✓ SUCCESS! Aesthetic score: {result['aesthetic_score']}")
         return result
         
     except Exception as e:
-        import traceback
         error_msg = f"Error: {str(e)}\n{traceback.format_exc()}"
-        print(error_msg)
+        print(f"✗ HANDLER ERROR:\n{error_msg}")
         return {"error": error_msg}
 
 if __name__ == "__main__":
-    print("Starting RunPod handler...")
-    runpod.serverless.start({"handler": handler})
+    print("\n" + "="*60)
+    print("STARTING RUNPOD HANDLER")
+    print("="*60)
+    try:
+        runpod.serverless.start({"handler": handler})
+    except Exception as e:
+        print(f"✗ FATAL ERROR starting handler: {e}")
+        traceback.print_exc()
+        sys.exit(1)
