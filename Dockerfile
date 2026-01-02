@@ -1,5 +1,5 @@
-# Use a highly compatible CUDA runtime
-FROM pytorch/pytorch:2.1.2-cuda12.1-cudnn8-runtime
+# Use a newer CUDA runtime with PyTorch 2.2+
+FROM pytorch/pytorch:2.2.0-cuda12.1-cudnn8-runtime
 
 WORKDIR /app
 
@@ -16,12 +16,18 @@ ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1
 
 COPY requirements.txt .
-RUN pip install -r requirements.txt
+
+# Upgrade pip and install requirements
+RUN pip install --upgrade pip && \
+    pip install -r requirements.txt
 
 # Copy handler code
 COPY handler.py .
 
-# Add a simple health check that prints versions
-RUN python -c "import sys; print(f'Python: {sys.version}'); import torch; print(f'PyTorch: {torch.__version__}'); import diffusers; print(f'Diffusers: {diffusers.__version__}')"
+# Verify installations
+RUN python -c "import sys; print(f'Python: {sys.version}'); \
+    import torch; print(f'PyTorch: {torch.__version__}'); \
+    import diffusers; print(f'Diffusers: {diffusers.__version__}'); \
+    from diffusers import EDMDPMSolverMultistepScheduler; print('EDMDPMSolverMultistepScheduler imported successfully')"
 
 CMD ["python", "-u", "handler.py"]
