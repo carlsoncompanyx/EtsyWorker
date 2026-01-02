@@ -5,3 +5,4 @@ accelerate==0.25.0
 safetensors==0.4.1
 omegaconf
 Pillow
+huggingface-hub>=0.22.0,<0.37

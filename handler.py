@@ -6,7 +6,24 @@ import torch
 import torch.nn as nn
 from PIL import Image
 import runpod
-from diffusers import StableDiffusionXLPipeline, EDMDPMSolverMultistepScheduler
+import huggingface_hub
+
+# Backward-compatibility shim for diffusers<=0.25 expecting cached_download
+# huggingface_hub 0.23+ removed cached_download; remap to hf_hub_download when missing
+if not hasattr(huggingface_hub, "cached_download"):
+    from huggingface_hub import file_download
+
+    def _cached_download(*args, **kwargs):
+        return file_download.hf_hub_download(*args, **kwargs)
+
+    huggingface_hub.cached_download = _cached_download
+
+try:
+    from diffusers import StableDiffusionXLPipeline, EDMDPMSolverMultistepScheduler
+    SchedulerCls = EDMDPMSolverMultistepScheduler
+except ImportError:
+    from diffusers import StableDiffusionXLPipeline, DPMSolverMultistepScheduler
+    SchedulerCls = DPMSolverMultistepScheduler
 from transformers import AutoModel, AutoProcessor
 
 # Add GitHub repo to path
@@ -31,7 +48,7 @@ def load_models():
             torch_dtype=torch.float16,
             use_safetensors=True
         ).to("cuda")
-        pipe.scheduler = EDMDPMSolverMultistepScheduler.from_config(pipe.scheduler.config)
+        pipe.scheduler = SchedulerCls.from_config(pipe.scheduler.config)
 
     if aesthetic_model is None:
         print(f"Loading Predictor from {SIGLIP_PATH}")
