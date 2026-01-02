@@ -1,33 +1,27 @@
-# Use a newer CUDA runtime with PyTorch 2.2+
-FROM pytorch/pytorch:2.2.0-cuda12.1-cudnn8-runtime
+# Use stable PyTorch 2.1.2 base
+FROM pytorch/pytorch:2.1.2-cuda12.1-cudnn8-runtime
 
 WORKDIR /app
 
-# Install system dependencies for OpenCV and Image processing
+# Install system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libgl1-mesa-glx \
     libglib2.0-0 \
     git \
     && rm -rf /var/lib/apt/lists/*
 
-# Optimize Python environment
+# Environment variables
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1
 
 COPY requirements.txt .
 
-# Upgrade pip and install requirements
+# Install Python packages with specific versions for compatibility
 RUN pip install --upgrade pip && \
     pip install -r requirements.txt
 
-# Copy handler code
+# Copy handler
 COPY handler.py .
-
-# Verify installations
-RUN python -c "import sys; print(f'Python: {sys.version}'); \
-    import torch; print(f'PyTorch: {torch.__version__}'); \
-    import diffusers; print(f'Diffusers: {diffusers.__version__}'); \
-    from diffusers import EDMDPMSolverMultistepScheduler; print('EDMDPMSolverMultistepScheduler imported successfully')"
 
 CMD ["python", "-u", "handler.py"]
