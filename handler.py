@@ -238,38 +238,21 @@ print(f"PREDICTOR_WEIGHTS isfile: {os.path.isfile(PREDICTOR_WEIGHTS)}  -> {PREDI
 print(f"AESTHETIC_REPO_PATH isdir: {os.path.isdir(AESTHETIC_REPO_PATH)}  -> {AESTHETIC_REPO_PATH}")
 
 # ============================================================
-# PATCH: diffusers 0.28.0 single-file load may inject `safety_checker`
-# into StableDiffusionXLPipeline.__init__, which doesn't accept it.
-# This subclass accepts & ignores it to prevent crashes.
+# PATCH: diffusers 0.28.0 single-file load validation bypass
+# Accept any parameters but only pass required ones to parent
 # ============================================================
 class PatchedStableDiffusionXLPipeline(StableDiffusionXLPipeline):
-    def __init__(
-        self,
-        vae,
-        text_encoder,
-        text_encoder_2,
-        tokenizer,
-        tokenizer_2,
-        unet,
-        scheduler,
-        image_encoder=None,
-        feature_extractor=None,
-        safety_checker=None,
-        requires_safety_checker=True,
-        **kwargs
-    ):
-        # Ignore safety_checker and feature_extractor, pass only what parent expects
-        super().__init__(
-            vae=vae,
-            text_encoder=text_encoder,
-            text_encoder_2=text_encoder_2,
-            tokenizer=tokenizer,
-            tokenizer_2=tokenizer_2,
-            unet=unet,
-            scheduler=scheduler,
-            image_encoder=image_encoder,
-            requires_safety_checker=False,  # Disable safety checker requirement
-        )
+    def __init__(self, *args, **kwargs):
+        # Extract only the parameters parent class needs
+        allowed_keys = {
+            'vae', 'text_encoder', 'text_encoder_2', 'tokenizer', 
+            'tokenizer_2', 'unet', 'scheduler', 'image_encoder'
+        }
+        
+        filtered_kwargs = {k: v for k, v in kwargs.items() if k in allowed_keys}
+        
+        # Handle positional args (vae, text_encoder, text_encoder_2, tokenizer, tokenizer_2, unet, scheduler)
+        super().__init__(*args, **filtered_kwargs, requires_safety_checker=False)
 
 # ============================================================
 # GLOBAL MODEL VARIABLES (initialize first)
@@ -347,7 +330,6 @@ def load_models():
                 MODEL_PATH,
                 torch_dtype=torch.float16,
                 use_safetensors=True,
-                load_safety_checker=False,
             ).to("cuda")
 
             # Use EDMDPMSolverMultistepScheduler as recommended by Playground
